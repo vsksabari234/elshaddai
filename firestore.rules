@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all rule
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidFeedback(data) {
+      return data.keys().hasAll(['clientName', 'projectType', 'quote', 'rating']) &&
+        data.keys().hasOnly(['clientName', 'projectType', 'quote', 'rating', 'location', 'clientRole', 'verifiedProject', 'date', 'createdAt', 'id']) &&
+        data.clientName is string && data.clientName.size() >= 1 && data.clientName.size() <= 100 &&
+        data.projectType is string && data.projectType.size() >= 1 && data.projectType.size() <= 150 &&
+        data.quote is string && data.quote.size() >= 1 && data.quote.size() <= 2000 &&
+        data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+        (!('location' in data) || (data.location is string && data.location.size() <= 150)) &&
+        (!('clientRole' in data) || (data.clientRole is string && data.clientRole.size() <= 100)) &&
+        (!('verifiedProject' in data) || data.verifiedProject is bool) &&
+        (!('date' in data) || (data.date is string && data.date.size() <= 50)) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 100)) &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 100));
+    }
+
+    match /feedback/{feedbackId} {
+      // Public client feedback visible across all devices
+      allow get, list: if true;
+
+      // Visitors can create feedback with strict validation
+      allow create: if isValidId(feedbackId) && isValidFeedback(incoming());
+
+      // Visitors cannot edit or delete feedback
+      allow update, delete: if false;
+    }
+  }
+}

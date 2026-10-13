@@ -68,7 +68,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
 
   if (!isOpen || !mounted) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     // Only Name and Work Type are strictly required
     if (!clientName.trim() || !projectType.trim() || isSubmitting) return;
@@ -93,17 +93,21 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
       new CustomEvent('sunil_trigger_kite_flight', { detail: { startPos } })
     );
 
-    const saved = saveNewTestimonial({
-      clientName: clientName.trim(),
-      clientRole: 'Homeowner', // Default role since client role button was removed
-      projectType: projectType.trim(),
-      location: location.trim() || 'Bengaluru',
-      quote: quote.trim() || `Excellent custom carpentry and solid precision joinery for ${projectType.trim()}. Very happy with Master Sunil's workmanship and finishing.`,
-      rating,
-    });
+    try {
+      const saved = await saveNewTestimonial({
+        clientName: clientName.trim(),
+        clientRole: 'Homeowner', // Default role
+        projectType: projectType.trim(),
+        location: location.trim() || 'Bengaluru',
+        quote: quote.trim() || `Excellent custom carpentry and solid precision joinery for ${projectType.trim()}. Very happy with the workmanship and finishing.`,
+        rating,
+      });
 
-    if (onFeedbackSubmitted) {
-      onFeedbackSubmitted(saved);
+      if (onFeedbackSubmitted) {
+        onFeedbackSubmitted(saved);
+      }
+    } catch (err) {
+      console.warn('Feedback save warning:', err);
     }
 
     // Show celebratory confirmation

@@ -11,7 +11,7 @@ import {
   Search,
   Award,
 } from 'lucide-react';
-import { getStoredTestimonials, syncRemoteAndLocalReviews } from '../services/feedbackStorage';
+import { getStoredTestimonials, subscribeToFeedback } from '../services/feedbackStorage';
 import { Testimonial } from '../data/testimonialsData';
 
 interface TestimonialsSectionProps {
@@ -35,22 +35,20 @@ export const TestimonialsSection: React.FC<TestimonialsSectionProps> = ({
   const touchEndX = useRef<number | null>(null);
 
   useEffect(() => {
-    // Synchronize from server API and IndexedDB in background
-    syncRemoteAndLocalReviews()
-      .then((synced) => {
-        if (synced && synced.length > 0) {
-          setReviews(synced);
-        }
-      })
-      .catch((err) => {
-        console.warn('Sync feedback warning:', err);
-      });
+    // Real-time listener for Firestore feedback updates across all devices
+    const unsubscribe = subscribeToFeedback((updatedReviews) => {
+      setReviews(updatedReviews);
+    });
 
     const handleUpdate = () => {
       setReviews(getStoredTestimonials());
     };
     window.addEventListener('sunil_woodworks_review_added', handleUpdate);
-    return () => window.removeEventListener('sunil_woodworks_review_added', handleUpdate);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('sunil_woodworks_review_added', handleUpdate);
+    };
   }, []);
 
   // Compute overall review statistics by calculating the average rating dynamically

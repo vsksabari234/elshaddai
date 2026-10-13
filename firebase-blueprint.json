@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "Feedback": {
+      "title": "Feedback",
+      "description": "Client testimonial and review submitted for custom carpentry and woodwork projects.",
+      "type": "object",
+      "properties": {
+        "clientName": {
+          "type": "string",
+          "description": "Name of the client who submitted the feedback",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "projectType": {
+          "type": "string",
+          "description": "Category or type of woodwork project (e.g. Modular Kitchen, Fitted Wardrobes)",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "quote": {
+          "type": "string",
+          "description": "Client's review comment or quote describing their experience",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "rating": {
+          "type": "number",
+          "description": "Rating score between 1 and 5 stars"
+        },
+        "location": {
+          "type": "string",
+          "description": "Area or neighborhood of the project (e.g. Indiranagar, Whitefield)",
+          "maxLength": 150
+        },
+        "clientRole": {
+          "type": "string",
+          "description": "Role of the client (e.g. Homeowner, Architect)",
+          "maxLength": 100
+        },
+        "verifiedProject": {
+          "type": "boolean",
+          "description": "Whether the review is from a verified on-site project"
+        },
+        "date": {
+          "type": "string",
+          "description": "Formatted month and year of the project (e.g. October 2026)",
+          "maxLength": 50
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp or server timestamp string of submission"
+        }
+      },
+      "required": [
+        "clientName",
+        "projectType",
+        "quote",
+        "rating"
+      ]
+    }
+  },
+  "firestore": {
+    "/feedback/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "Public client feedback and reviews visible across all devices in real-time."
+    }
+  }
+}

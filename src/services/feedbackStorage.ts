@@ -1,101 +1,26 @@
+import { collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../config/firebase';
 import { testimonialsData, Testimonial } from '../data/testimonialsData';
 
-const PRIMARY_STORAGE_KEY = 'el_shaddai_client_reviews';
-const LEGACY_STORAGE_KEY = 'sunil_woodworks_client_reviews';
-const IDB_NAME = 'el_shaddai_reviews_db';
-const IDB_STORE = 'reviews_store';
+const COLLECTION_NAME = 'feedback';
+const LOCAL_STORAGE_KEY = 'el_shaddai_client_reviews';
 
-// In-memory cache for ultra-fast, synchronous access
-let memoryCustomReviews: Testimonial[] = [];
-let isInitialized = false;
-
-// Open IndexedDB helper
-const openReviewsDB = (): Promise<IDBDatabase | null> => {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined' || !window.indexedDB) {
-      resolve(null);
-      return;
-    }
-    try {
-      const request = indexedDB.open(IDB_NAME, 1);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(IDB_STORE)) {
-          db.createObjectStore(IDB_STORE, { keyPath: 'id' });
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
-    } catch {
-      resolve(null);
-    }
-  });
-};
-
-// Save to IndexedDB
-const saveReviewToIDB = async (review: Testimonial) => {
+// Load any cached reviews on initialization for zero-delay first paint
+let initialCached: Testimonial[] = [];
+if (typeof window !== 'undefined') {
   try {
-    const db = await openReviewsDB();
-    if (!db) return;
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    const store = tx.objectStore(IDB_STORE);
-    store.put(review);
-  } catch (err) {
-    console.warn('IDB write failed:', err);
-  }
-};
-
-// Read all from IndexedDB
-const getAllReviewsFromIDB = async (): Promise<Testimonial[]> => {
-  try {
-    const db = await openReviewsDB();
-    if (!db) return [];
-    return new Promise((resolve) => {
-      const tx = db.transaction(IDB_STORE, 'readonly');
-      const store = tx.objectStore(IDB_STORE);
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => resolve([]);
-    });
-  } catch {
-    return [];
-  }
-};
-
-// Helper: Read reviews from localStorage (checking both primary and legacy keys)
-const readFromLocalStorage = (): Testimonial[] => {
-  if (typeof window === 'undefined') return [];
-  try {
-    const primary = localStorage.getItem(PRIMARY_STORAGE_KEY);
-    if (primary) {
-      const parsed = JSON.parse(primary);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) initialCached = parsed;
     }
-    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (legacy) {
-      const parsed = JSON.parse(legacy);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch (err) {
-    console.warn('Error reading reviews from localStorage:', err);
-  }
-  return [];
-};
+  } catch {}
+}
 
-// Helper: Save to localStorage across both keys
-const persistToLocalStorage = (reviews: Testimonial[]) => {
-  if (typeof window === 'undefined') return;
-  try {
-    const serialized = JSON.stringify(reviews);
-    localStorage.setItem(PRIMARY_STORAGE_KEY, serialized);
-    localStorage.setItem(LEGACY_STORAGE_KEY, serialized);
-  } catch (err) {
-    console.warn('Error writing reviews to localStorage:', err);
-  }
-};
+// In-memory cache starting with cached custom reviews + base testimonials
+let memoryReviews: Testimonial[] = deduplicateReviews([...initialCached, ...testimonialsData]);
 
-// Deduplicate helper
-const deduplicateReviews = (list: Testimonial[]): Testimonial[] => {
+function deduplicateReviews(list: Testimonial[]): Testimonial[] {
   const seenIds = new Set<string>();
   const seenQuotes = new Set<string>();
   const result: Testimonial[] = [];
@@ -111,121 +36,110 @@ const deduplicateReviews = (list: Testimonial[]): Testimonial[] => {
   }
 
   return result;
-};
-
-// Initialize in-memory cache from localStorage on script evaluation
-if (typeof window !== 'undefined') {
-  memoryCustomReviews = readFromLocalStorage();
 }
 
 /**
- * Synchronous getter: Returns base reviews merged with any custom stored reviews.
- * Safe to call inside useState(() => getStoredTestimonials())
+ * Synchronous getter: Returns current reviews in memory
  */
 export const getStoredTestimonials = (): Testimonial[] => {
-  if (typeof window !== 'undefined' && memoryCustomReviews.length === 0) {
-    memoryCustomReviews = readFromLocalStorage();
-  }
-  const combined = [...memoryCustomReviews, ...testimonialsData];
-  return deduplicateReviews(combined);
+  return memoryReviews;
 };
 
 /**
- * Async Sync: Queries server API (/api/feedback) and IndexedDB, merges with local state,
- * and notifies listeners if new reviews are discovered.
+ * Real-time listener: Subscribes to Firestore collection changes in real time.
+ * Automatically synchronizes reviews across all devices and visitors.
  */
-export const syncRemoteAndLocalReviews = async (): Promise<Testimonial[]> => {
-  let hasNew = false;
-  const currentReviews = [...memoryCustomReviews];
+export const subscribeToFeedback = (callback: (reviews: Testimonial[]) => void): (() => void) => {
+  const feedbackCol = collection(db, COLLECTION_NAME);
 
-  // 1. Try fetching from IndexedDB
-  try {
-    const idbReviews = await getAllReviewsFromIDB();
-    for (const r of idbReviews) {
-      if (!currentReviews.some((c) => c.id === r.id)) {
-        currentReviews.push(r);
-        hasNew = true;
+  // Send current cached reviews right away
+  callback(memoryReviews);
+
+  const unsubscribe = onSnapshot(
+    feedbackCol,
+    (snapshot) => {
+      const firestoreItems: Testimonial[] = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          clientName: data.clientName || 'Client',
+          clientRole: data.clientRole || 'Homeowner',
+          projectType: data.projectType || 'Custom Woodwork',
+          location: data.location || 'Bengaluru',
+          quote: data.quote || '',
+          date: data.date || '',
+          rating: Number(data.rating) || 5,
+          verifiedProject: data.verifiedProject ?? true,
+        };
+      });
+
+      // Merge real-time items from Firestore with base catalog reviews
+      const combined = deduplicateReviews([...firestoreItems, ...testimonialsData]);
+      memoryReviews = combined;
+
+      // Update localStorage cache for offline/instant resume
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(firestoreItems));
+      } catch {}
+
+      callback(combined);
+    },
+    (error) => {
+      // CRITICAL: Handle Firestore error using the required handler
+      try {
+        handleFirestoreError(error, OperationType.GET, COLLECTION_NAME);
+      } catch (e) {
+        console.warn('Real-time feedback listener error (using cached reviews):', e);
       }
     }
-  } catch (e) {
-    console.warn('Error syncing with IndexedDB:', e);
-  }
+  );
 
-  // 2. Try fetching from Server API (/api/feedback or /api/reviews)
-  try {
-    const res = await fetch('/api/feedback', {
-      headers: { Accept: 'application/json' },
-    });
-    const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
-      const serverReviews: Testimonial[] = await res.json();
-      if (Array.isArray(serverReviews)) {
-        for (const s of serverReviews) {
-          if (!currentReviews.some((c) => c.id === s.id)) {
-            currentReviews.unshift(s);
-            hasNew = true;
-          }
-        }
-      }
-    }
-  } catch (e) {
-    // Server endpoint not reachable or static-only host; graceful fallback
-  }
-
-  if (hasNew) {
-    const deduped = deduplicateReviews(currentReviews);
-    memoryCustomReviews = deduped;
-    persistToLocalStorage(deduped);
-    for (const r of deduped) {
-      saveReviewToIDB(r);
-    }
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('sunil_woodworks_review_added'));
-    }
-  }
-
-  return getStoredTestimonials();
+  return unsubscribe;
 };
 
 /**
- * Save a newly written client testimonial with multi-tier persistence:
- * 1. In-memory immediately
- * 2. LocalStorage immediately
- * 3. IndexedDB
- * 4. Server API (/api/feedback)
+ * Save new feedback to Firestore:
+ * Writes directly to the shared Cloud Firestore collection so it is visible to all devices immediately.
  */
-export const saveNewTestimonial = (
+export const saveNewTestimonial = async (
   review: Omit<Testimonial, 'id' | 'date' | 'verifiedProject'>
-): Testimonial => {
+): Promise<Testimonial> => {
+  const docId = `review_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const dateStr = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const createdAtStr = new Date().toISOString();
+
   const newReview: Testimonial = {
     ...review,
-    id: `custom-review-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    date: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+    id: docId,
+    date: dateStr,
     verifiedProject: true,
   };
 
-  // 1. Memory update
-  memoryCustomReviews = deduplicateReviews([newReview, ...memoryCustomReviews]);
+  const firestorePayload = {
+    id: docId,
+    clientName: review.clientName.trim(),
+    clientRole: review.clientRole ? review.clientRole.trim() : 'Homeowner',
+    projectType: review.projectType.trim(),
+    location: review.location ? review.location.trim() : 'Bengaluru',
+    quote: review.quote.trim(),
+    rating: Number(review.rating) || 5,
+    verifiedProject: true,
+    date: dateStr,
+    createdAt: createdAtStr,
+  };
 
-  // 2. LocalStorage persistence
-  persistToLocalStorage(memoryCustomReviews);
+  const docPath = `${COLLECTION_NAME}/${docId}`;
 
-  // 3. IndexedDB persistence (async)
-  saveReviewToIDB(newReview);
+  try {
+    const docRef = doc(db, COLLECTION_NAME, docId);
+    await setDoc(docRef, firestorePayload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, docPath);
+  }
 
-  // 4. Server API POST persistence (async)
+  // Update local memory and broadcast event
+  memoryReviews = deduplicateReviews([newReview, ...memoryReviews]);
   if (typeof window !== 'undefined') {
-    fetch('/api/feedback', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(newReview),
-    }).catch((err) => {
-      console.warn('Server feedback sync offline (saved to browser cache):', err);
-    });
-
-    // Notify all UI components immediately
     window.dispatchEvent(new CustomEvent('sunil_woodworks_review_added'));
   }
 
