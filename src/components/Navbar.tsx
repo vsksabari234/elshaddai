@@ -44,10 +44,18 @@ export const Navbar: React.FC<NavbarProps> = ({
     };
   }, [mobileMenuOpen]);
 
-  const navLinks = [
+  interface NavLinkItem {
+    label: string;
+    href: string;
+    isHome?: boolean;
+    isGallery?: boolean;
+    badge?: string;
+  }
+
+  const navLinks: NavLinkItem[] = [
     { label: 'Home', href: '#home', isHome: true },
     { label: 'Services', href: '#services' },
-    { label: 'Gallery', href: '#gallery-page', isGallery: true },
+    { label: 'Gallery', href: '#gallery-page', isGallery: true, badge: '100+' },
     { label: 'Process', href: '#process' },
     { label: 'About', href: '#about' },
     { label: 'Contact', href: '#contact' },

@@ -11,7 +11,7 @@ import {
   Search,
   Award,
 } from 'lucide-react';
-import { getStoredTestimonials } from '../services/feedbackStorage';
+import { getStoredTestimonials, syncRemoteAndLocalReviews } from '../services/feedbackStorage';
 import { Testimonial } from '../data/testimonialsData';
 
 interface TestimonialsSectionProps {
@@ -23,7 +23,7 @@ export const TestimonialsSection: React.FC<TestimonialsSectionProps> = ({
   onOpenFeedback,
   onOpenQuote,
 }) => {
-  const [reviews, setReviews] = useState<Testimonial[]>([]);
+  const [reviews, setReviews] = useState<Testimonial[]>(() => getStoredTestimonials());
   const [currentIndex, setCurrentIndex] = useState(0);
   const [itemsPerPage, setItemsPerPage] = useState(3);
   const [isAllReviewsModalOpen, setIsAllReviewsModalOpen] = useState(false);
@@ -35,7 +35,16 @@ export const TestimonialsSection: React.FC<TestimonialsSectionProps> = ({
   const touchEndX = useRef<number | null>(null);
 
   useEffect(() => {
-    setReviews(getStoredTestimonials());
+    // Synchronize from server API and IndexedDB in background
+    syncRemoteAndLocalReviews()
+      .then((synced) => {
+        if (synced && synced.length > 0) {
+          setReviews(synced);
+        }
+      })
+      .catch((err) => {
+        console.warn('Sync feedback warning:', err);
+      });
 
     const handleUpdate = () => {
       setReviews(getStoredTestimonials());
